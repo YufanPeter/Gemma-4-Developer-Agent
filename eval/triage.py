@@ -49,16 +49,20 @@ from typing import Any
 #   patch_rejected  -> patch applied, not resolved, can't tell which of the above
 RESOLVED = "resolved"
 APPLY_FAIL = "apply_fail"
+CONTEXT_OVERFLOW = "context_overflow"
 NO_PATCH_BUDGET = "no_patch_budget"
 NO_PATCH_GAVEUP = "no_patch_gaveup"
+ENV_ERROR = "env_error"
 WRONG_FIX = "wrong_fix"
 REGRESSION = "regression"
 PATCH_REJECTED = "patch_rejected"
 
 FAIL_BUCKETS = [
     APPLY_FAIL,
+    CONTEXT_OVERFLOW,
     NO_PATCH_BUDGET,
     NO_PATCH_GAVEUP,
+    ENV_ERROR,
     WRONG_FIX,
     REGRESSION,
     PATCH_REJECTED,
@@ -66,6 +70,8 @@ FAIL_BUCKETS = [
 
 # What each bucket suggests you work on next (printed in the report).
 BUCKET_HINT = {
+    ENV_ERROR: "NOT the agent's fault -> test env missing deps/fixtures (collection/setup errored). Fix the sandbox or exclude from the dev metric",
+    CONTEXT_OVERFLOW: "config -> lower max_output_tokens (e.g. 4096) so input+output < 32768; the LLM call hard-fails otherwise",
     NO_PATCH_BUDGET: "localization/efficiency -> use graph tools harder, raise max_tool_calls, speed up explore",
     WRONG_FIX: "localization/reasoning -> find the right file/symbol before editing",
     REGRESSION: "minimality -> make smaller, more targeted edits; don't touch unrelated code",
@@ -76,6 +82,21 @@ BUCKET_HINT = {
 
 # pytest "-q" prints lines like:  FAILED path/to/test_x.py::test_name - AssertionError
 _FAILED_RE = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)", re.MULTILINE)
+
+# a pytest run that errored at collection/setup (missing dep, broken fixture) did NOT
+# actually test the agent's patch -- it's an environment problem, not the agent's fault
+_ENV_ERROR_RE = re.compile(
+    r"ERROR collecting|ModuleNotFoundError|ImportError while importing"
+    r"|errors? during collection|recursive dependency involving fixture"
+    r"|ERROR at setup of|fixture '[^']+' not found",
+    re.IGNORECASE,
+)
+
+# signatures of a 32768-token context-window overflow (hard LLM failure, not the agent giving up)
+_CTX_OVERFLOW_RE = re.compile(
+    r"context\s*window|maximum context length|ContextWindowExceeded|32768",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -204,6 +225,12 @@ def classify(results_dir: Path, row: TaskRow) -> None:
         row.why = "patch could not be applied in Phase 2"
         return
 
+    # context-window overflow: the LLM call hard-fails (max_output_tokens + input > 32768)
+    if row.error and _CTX_OVERFLOW_RE.search(row.error):
+        row.bucket = CONTEXT_OVERFLOW
+        row.why = "LLM call exceeded 32768-token window (lower max_output_tokens)"
+        return
+
     if row.patch_chars == 0:
         if _hit_budget(row):
             row.bucket = NO_PATCH_BUDGET
@@ -219,7 +246,31 @@ def classify(results_dir: Path, row: TaskRow) -> None:
             )
         return
 
-    # Non-empty patch but not resolved: figure out which tests failed.
+    # Non-empty patch but not resolved. First rule out an environment failure:
+    # if pytest errored at collection/setup (missing dep, broken fixture), the
+    # patch was never actually tested -- not the agent's fault.
+    log_text = ""
+    for p in ([results_dir / row.test_log] if row.test_log else []) + [
+        results_dir / "test_outputs" / f"{row.id}.log"
+    ]:
+        if p.exists():
+            try:
+                log_text = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                log_text = ""
+            break
+    if log_text and _ENV_ERROR_RE.search(log_text):
+        row.bucket = ENV_ERROR
+        m = re.search(r"ModuleNotFoundError: No module named '([^']+)'", log_text)
+        if m:
+            row.why = f"test env missing module '{m.group(1)}' (collection error, patch untested)"
+        elif "recursive dependency involving fixture" in log_text:
+            row.why = "broken pytest fixture (httpbin/plugin not loaded); patch untested"
+        else:
+            row.why = "pytest errored at collection/setup; patch untested"
+        return
+
+    # figure out which tests failed.
     failed = _read_failed_nodes(results_dir, row)
     if failed and row.fail_to_pass:
         target_still_failing = any(
