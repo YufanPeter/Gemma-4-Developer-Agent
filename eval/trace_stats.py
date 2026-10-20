@@ -22,6 +22,10 @@ from collections import Counter
 from pathlib import Path
 
 EDIT_TOOLS = {"edit_file", "write_file"}
+# Not budget-gated: submit_patch/get_status are free, and calling the locator AgentTool
+# is free too (only the tool calls it makes inside count).
+FREE_TOOLS = {"submit_patch", "get_status", "locator"}
+LOCATOR = "locator"
 SCRATCH_HINTS = ("repro", "reproduce", "check_", "verify_", "debug", "scratch")
 
 
@@ -30,7 +34,7 @@ def _short(fn: str, args: dict) -> str:
         parts = (args.get("command") or "").split()
         return "rc:" + (parts[0][:8] if parts else "")
     return {"read_file": "read", "edit_file": "edit", "write_file": "writ",
-            "submit_patch": "SUBMIT", "get_status": "stat"}.get(fn, fn[:6])
+            "submit_patch": "SUBMIT", "get_status": "stat", LOCATOR: "LOC"}.get(fn, fn[:6])
 
 
 def _is_source_edit(fn: str, args: dict) -> bool:
@@ -44,7 +48,7 @@ def _is_source_edit(fn: str, args: dict) -> bool:
 
 
 def analyze(trace: dict, budget_tokens: int) -> dict:
-    calls = 0
+    calls = loc_calls = 0
     first_edit_call = first_edit_s = None
     prev_el = 0.0
     step_secs, comps, seq = [], [], []
@@ -61,12 +65,14 @@ def analyze(trace: dict, budget_tokens: int) -> dict:
             step_secs.append(el - prev_el)
         max_prompt = max(max_prompt, m.get("prompt_tokens") or 0)
         prev_el = el
+        in_locator = (s.get("extra") or {}).get("author") == LOCATOR
         for tc in s.get("tool_calls") or []:
             fn, args = tc.get("function_name", "?"), tc.get("arguments") or {}
             tools[fn] += 1
-            if fn not in ("submit_patch", "get_status"):  # free calls
+            if fn not in FREE_TOOLS:
                 calls += 1
-            seq.append(_short(fn, args))
+                loc_calls += in_locator
+            seq.append(("L:" if in_locator else "") + _short(fn, args))
             if fn == "write_file" and any(h in os.path.basename(args.get("filepath") or "") for h in SCRATCH_HINTS):
                 scratch_writes += 1
             if first_edit_call is None and _is_source_edit(fn, args):
@@ -76,6 +82,7 @@ def analyze(trace: dict, budget_tokens: int) -> dict:
         "calls": calls,
         "first_edit_call": first_edit_call,
         "first_edit_s": first_edit_s,
+        "loc_calls": loc_calls,
         "reads": tools["read_file"],
         "scratch_writes": scratch_writes,
         "llm_steps": len(comps),
@@ -109,7 +116,7 @@ def main() -> None:
 
     all_tools, secs, comps, per = Counter(), [], [], []
     print(f"{'id':<15}{'bucket':<17}{'calls':>5}{'dur':>5}{'edit@call':>10}{'edit@s':>7}"
-          f"{'reads':>6}{'scr':>4}{'sat':>4}{'maxPrompt':>10}")
+          f"{'loc':>4}{'reads':>6}{'scr':>4}{'sat':>4}{'maxPrompt':>10}")
     for f in sorted(glob.glob(str(rd / "traces" / "trace_*.json"))):
         tid = os.path.basename(f)[len("trace_"):-len(".json")]
         a = analyze(json.load(open(f)), args.thinking_budget)
@@ -120,7 +127,7 @@ def main() -> None:
         r = rows.get(tid, {})
         fe_s = f"{a['first_edit_s']:.0f}" if a["first_edit_s"] is not None else "-"
         print(f"{tid:<15}{triage.get(tid, '?'):<17}{a['calls']:>5}{(r.get('duration_seconds') or 0):>5.0f}"
-              f"{str(a['first_edit_call'] or '-'):>10}{fe_s:>7}{a['reads']:>6}{a['scratch_writes']:>4}"
+              f"{str(a['first_edit_call'] or '-'):>10}{fe_s:>7}{a['loc_calls']:>4}{a['reads']:>6}{a['scratch_writes']:>4}"
               f"{a['saturated_steps']:>4}{a['max_prompt']:>10}")
         if not args.no_seq:
             print("    " + " ".join(a["seq"]))
