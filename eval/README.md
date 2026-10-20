@@ -48,6 +48,11 @@ run. (`exp_res/results_baseline_1016/` used an older 30-task subset; 13 tasks ov
 - `../scripts/build_extra_wheels.py` — downloads the extra test deps (+ their deps) as
   Linux/CPython 3.12 wheels into `dist/extra_wheels/`; `--upload` pushes them to
   `tianyuxu2/gemma-4-extra-test-wheels`. Only needed when that package list changes.
+- `../notebooks/gold-calibration/` — CPU-only Kaggle notebook (`tianyuxu2/gemma-4-gold-calibration`)
+  that runs Phase-2 verification with every task's **reference patch** in the same
+  subprocess sandbox + test-env fix. Output: `gold_results.jsonl` (one row per task) and
+  `env_broken.json` (tasks whose reference patch fails here, so they cannot be measured
+  locally). Current result: 114/129 reference patches pass.
 - `triage.py` — reads `results/`, prints + writes the failure breakdown.
 - `refdiff.py` — agent patch vs reference patch: localization (`same_lines` /
   `same_region` / `same_file` / `wrong_file` / `scratch_only` / `no_edit`), missed
@@ -108,7 +113,8 @@ which the harness does not provide — most such tasks then land in `patch_rejec
   reference patches pass on 114/129 tasks (74/129 without); the 1016/1017 baselines ran
   without it, so their `env_error` bucket (18/60 in 1017) is mostly env, not agent.
   Still broken even with the fix (dev set): fastapi_15745, fastapi_15785,
-  requests_6589, requests_6629.
+  requests_6589, requests_6629 (full list: `eval/env_broken.json`). Re-verifying the 1017
+  patches with the fix: 12 -> 21/60 resolved, nothing lost — use 21/60 as the baseline.
 - Train repos (fastapi/rich/requests/httpx) ≠ the private test repos. The subset
   measures the agent *method*, not memorized repo facts — watch the by-repo line
   for over-fit to one repo.
