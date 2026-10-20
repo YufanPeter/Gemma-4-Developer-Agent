@@ -1,0 +1,81 @@
+diff --git a/src/httpx/_network.py b/src/httpx/_network.py
+index 5ea9bb5..1a05570 100644
+--- a/src/httpx/_network.py
++++ b/src/httpx/_network.py
+@@ -160,7 +160,8 @@ class NetworkServer:
+         self._max_workers = 5
+         self._executor = None
+         self._thread = None
+-        self._streams = list[NetworkStream]
++        self._streams = []
++        self._streams_lock = threading.Lock()
+ 
+     @property
+     def host(self):
+@@ -176,18 +177,28 @@ class NetworkServer:
+         return self
+ 
+     def __exit__(self, exc_type, exc_val, exc_tb):
+-        self.listener.close()
+-        self._executor.shutdown(wait=True)
++        try:
++            self.listener.close()
++            with self._streams_lock:
++                for stream in self._streams:
++                    stream.close()
++            self._executor.shutdown(wait=True)
++        except KeyboardInterrupt:
++            pass
+ 
+     def _serve(self):
+         while stream := self.listener.accept():
+             self._executor.submit(self._handler, stream)
+ 
+     def _handler(self, stream):
++        with self._streams_lock:
++            self._streams.append(stream)
+         try:
+             self.handler(stream)
+         finally:
+             stream.close()
++            with self._streams_lock:
++                self._streams.remove(stream)
+ 
+ 
+ class NetworkBackend:
+diff --git a/src/httpx/_parsers.py b/src/httpx/_parsers.py
+index 830fccd..ec6a575 100644
+--- a/src/httpx/_parsers.py
++++ b/src/httpx/_parsers.py
+@@ -375,11 +375,14 @@ class HTTPParser:
+             self.recv_state = State.DONE
+         return body
+ 
+-    def complete(self):
++    @property
++    def keep_alive(self) -> bool:
++        return self.send_keep_alive and self.recv_keep_alive
++
++    def reset(self):
+         is_fully_complete = self.send_state == State.DONE and self.recv_state == State.DONE
+-        is_keepalive = self.send_keep_alive and self.recv_keep_alive
+ 
+-        if not (is_fully_complete and is_keepalive):
++        if not (is_fully_complete and self.keep_alive):
+             self.close()
+             return
+ 
+diff --git a/src/httpx/_server.py b/src/httpx/_server.py
+index 95226d9..f64b0ff 100644
+--- a/src/httpx/_server.py
++++ b/src/httpx/_server.py
+@@ -89,7 +89,10 @@ class HTTPConnection:
+ 
+     # Start it all over again...
+     def _complete(self):
+-        self._parser.complete
++        if self._parser.keep_alive:
++            while self._parser.recv_body():
++                pass
++        self._parser.reset()
+         self._idle_expiry = time.monotonic() + self._keepalive_duration

@@ -50,12 +50,12 @@ The wheels are in `~/Downloads/*.whl` (or unzip them from the wheelhouse dataset
 - `run_command` returns `CommandError` for any non-zero exit, so `grep` with no match looks like an error.
 - `submit_patch` runs `git add -N .`, so untracked scratch files end up in the patch; test files are stripped.
 
-## Status (2026-10-19)
+## Status (2026-10-20)
 | version | fingerprint | dev60 | leaderboard |
 |---|---|---|---|
 | baseline (`main`) | `dd3f43378887` | 12/60 raw, **19/60** with extra deps | 0.17 |
 | prompt v1: ROLE/RULES/WORKFLOW (`c782c3b`) | `1d11a450f1c0` | not run | 0.17 |
-| prompt v2: rule-conflict and edit-template fixes (`52652ec`) | `beb0abedf101` | run `prompt_v2_1019_60dev` in progress (notebook Version 2) | not submitted |
+| prompt v2: rule-conflict and edit-template fixes (`52652ec`) | `beb0abedf101` | **22/60** (`exp_res/results_prompt_1019_60dev`): +5 / -2 vs baseline, within noise | not submitted |
 
 Baseline findings (`exp_res/results_baseline_1017_60dev/triage_report.md`):
 - Late editing: median first source edit at call 19; 10 of 13 no-patch tasks first edited at calls 29–30. `budget_warning` mostly ignored.
@@ -66,3 +66,5 @@ Lesson so far: the baseline prompt already demanded an edit by call 12 and the m
 1. Execution aids via skills (do not consume `max_tool_calls`), e.g. a locate script that returns ranked candidate regions in one call.
 2. Structure: `SequentialAgent` locator → editor (→ reviewer that submits), keeping each step small.
 Compare every new run against 19/60, task by task.
+
+Dev-env ceiling is 53/60: the official reference `patch` itself fails Phase 2 in the dev env for requests_6629, 6589, 7205, 7328, 7427, 7502 (redirect / netrc / header tests) and httpx_3672 (collection error), checked 2026-10-20. Treat those 7 as unreachable; their `regression` / `env_error` buckets are not the agent's fault. fastapi_14482, 14953, 14978 pass with the reference patch, so their failures are the agent's (e.g. missing new `docs_src` files).
