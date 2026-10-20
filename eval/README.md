@@ -94,6 +94,14 @@ which the harness does not provide — most such tasks then land in `patch_rejec
 
 ## Notes
 
+- Test environment: the notebook's cell 2c (`FIX_TEST_ENV = True`) installs the test
+  deps the Kaggle image lacks (inline_snapshot, dirty_equals, pytest-httpbin, trustme)
+  from the `tianyuxu2/gemma-4-extra-test-wheels` dataset — attach it — and adds a
+  src-layout hook so psf/requests tests import the patched workspace. With it the
+  reference patches pass on 114/129 tasks (74/129 without); the 1016/1017 baselines ran
+  without it, so their `env_error` bucket (18/60 in 1017) is mostly env, not agent.
+  Still broken even with the fix (dev set): fastapi_15745, fastapi_15785,
+  requests_6589, requests_6629.
 - Train repos (fastapi/rich/requests/httpx) ≠ the private test repos. The subset
   measures the agent *method*, not memorized repo facts — watch the by-repo line
   for over-fit to one repo.
