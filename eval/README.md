@@ -10,7 +10,9 @@ fix next.
 1. Edit the agent (`submission/` — `agent.yaml`, `sub_agents/`, `prompts/`, `skills/`). No GPU needed locally.
 2. Package and validate: `python scripts/package_submission.py` → `dist/submission.zip`
    (prints a fingerprint).
-3. Upload `dist/submission.zip` as a new version of your Kaggle Dataset.
+3. Upload `dist/submission.zip` as a new version of your Kaggle Dataset — or do steps 2+3
+   in one go with `python scripts/package_submission.py --upload -m "<what changed>"`
+   (Kaggle CLI logged in; default dataset `tianyuxu2/gemma-4-agent-submission`, `--dataset` to change).
 4. Run `notebooks/getting-started-gemma-4-developer-agent.ipynb` on Kaggle (instructions
    in its first cell; set `RUN_NAME`, run with *Save & Run All*). Check that it prints
    the same submission fingerprint as step 2.
@@ -41,7 +43,11 @@ run. (`exp_res/results_baseline_1016/` used an older 30-task subset; 13 tasks ov
   attached datasets, validates it, runs the dev set (resumable, per-task crash-safe,
   stops before Kaggle's 12 h limit), and writes the files triage reads plus
   `run_meta.json` (submission fingerprint + config snapshot) and an env probe.
-- `../scripts/package_submission.py` — builds and validates `dist/submission.zip`.
+- `../scripts/package_submission.py` — builds and validates `dist/submission.zip`;
+  `--upload` pushes it as a new dataset version.
+- `../scripts/build_extra_wheels.py` — downloads the extra test deps (+ their deps) as
+  Linux/CPython 3.12 wheels into `dist/extra_wheels/`; `--upload` pushes them to
+  `tianyuxu2/gemma-4-extra-test-wheels`. Only needed when that package list changes.
 - `triage.py` — reads `results/`, prints + writes the failure breakdown.
 - `refdiff.py` — agent patch vs reference patch: localization (`same_lines` /
   `same_region` / `same_file` / `wrong_file` / `scratch_only` / `no_edit`), missed
@@ -96,7 +102,8 @@ which the harness does not provide — most such tasks then land in `patch_rejec
 
 - Test environment: the notebook's cell 2c (`FIX_TEST_ENV = True`) installs the test
   deps the Kaggle image lacks (inline_snapshot, dirty_equals, pytest-httpbin, trustme)
-  from the `tianyuxu2/gemma-4-extra-test-wheels` dataset — attach it — and adds a
+  from the `tianyuxu2/gemma-4-extra-test-wheels` dataset (built by
+  `scripts/build_extra_wheels.py`) — attach it — and adds a
   src-layout hook so psf/requests tests import the patched workspace. With it the
   reference patches pass on 114/129 tasks (74/129 without); the 1016/1017 baselines ran
   without it, so their `env_error` bucket (18/60 in 1017) is mostly env, not agent.

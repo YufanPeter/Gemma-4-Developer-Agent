@@ -5,6 +5,7 @@ against the competition's packaging rules before you upload it.
 
     python scripts/package_submission.py
     python scripts/package_submission.py --src submission --out dist/submission.zip
+    python scripts/package_submission.py --upload -m "prompt v2"   # + new dataset version
 
 Checks (same as the notebook's packaging cell / docs/HARNESS_README.md §2):
   * agent.yaml at the archive root
@@ -17,6 +18,9 @@ packaged -- .DS_Store alone would get the submission rejected.
 Prints a fingerprint of the packaged files. The dev-eval notebook prints the
 same fingerprint for the submission it actually ran, so you can confirm Kaggle
 picked up the dataset version you just uploaded.
+
+--upload pushes the zip as a new version of the submission Kaggle Dataset
+(default tianyuxu2/gemma-4-agent-submission); needs the Kaggle CLI logged in.
 """
 from __future__ import annotations
 
@@ -26,10 +30,13 @@ import sys
 import zipfile
 from pathlib import Path
 
+from kaggle_dataset import upload_version
+
 ALLOWED_EXT = {".yaml", ".yml", ".md", ".txt", ".py", ".json", ".safetensors"}
 MAX_TOTAL_BYTES = 3 * 1024**3
 SKIP_NAMES = {".DS_Store", "Thumbs.db"}
 SKIP_DIRS = {"__pycache__", ".ipynb_checkpoints", ".git"}
+DATASET = "tianyuxu2/gemma-4-agent-submission"
 
 
 def submission_fingerprint(root: Path, files: list[Path]) -> str:
@@ -71,6 +78,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Package and validate submission.zip")
     ap.add_argument("--src", default="submission", type=Path)
     ap.add_argument("--out", default=Path("dist/submission.zip"), type=Path)
+    ap.add_argument("--upload", action="store_true", help=f"push the zip as a new version of {DATASET}")
+    ap.add_argument("--dataset", default=DATASET)
+    ap.add_argument("-m", "--message", default="update submission")
     args = ap.parse_args()
 
     files, errors = collect(args.src)
@@ -87,7 +97,11 @@ def main() -> None:
     print(f"wrote {args.out} ({args.out.stat().st_size / 1024:.1f} KiB, {len(files)} files)")
     for p in files:
         print("  ", p.relative_to(args.src).as_posix())
-    print(f"fingerprint: {submission_fingerprint(args.src, files)}")
+    fingerprint = submission_fingerprint(args.src, files)
+    print(f"fingerprint: {fingerprint}")
+
+    if args.upload:
+        upload_version([args.out], args.dataset, f"{args.message} [{fingerprint}]")
 
 
 if __name__ == "__main__":
