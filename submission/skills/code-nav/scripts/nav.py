@@ -1,11 +1,14 @@
-"""Compact code navigation for /workspace (stdlib only, Python 3.8+, read-only).
+"""Compact code navigation for the task repository (stdlib only, Python 3.8+, read-only).
 
-  nav.py find TERM [TERM ...]   rank source files and their functions by the issue's terms
-  nav.py show FILE SYMBOL|LINE  print one function or class with line numbers (docstrings folded)
-  nav.py refs NAME              every use of NAME outside tests, grouped by enclosing function
-  nav.py tests NAME [NAME ...]  existing test functions that use NAME, with their first lines
-  nav.py outline FILE           classes and functions of FILE with line ranges
-  nav.py check                  before submit_patch: compile, file warnings, missed places, diff
+Install once with run_skill_script(skill_name="code-nav", file_path="scripts/nav.py", args=["install"]),
+then run every command with run_command from the repository:
+
+  python3 /tmp/nav.py find TERM [TERM ...]   rank source files and their functions by the issue's terms
+  python3 /tmp/nav.py show FILE SYMBOL|LINE  print one function or class with line numbers (docstrings folded)
+  python3 /tmp/nav.py refs NAME              every use of NAME outside tests, grouped by enclosing function
+  python3 /tmp/nav.py tests NAME [NAME ...]  existing test functions that use NAME, with their first lines
+  python3 /tmp/nav.py outline FILE           classes and functions of FILE with line ranges
+  python3 /tmp/nav.py check                  before submit_patch: compile, file warnings, missed places, diff
 """
 import ast
 import builtins
@@ -15,8 +18,32 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
-ROOT = os.environ.get("NAV_ROOT", "/workspace")
+NAV = "python3 /tmp/nav.py"
+
+
+def find_root():
+    """The repository: NAV_ROOT (tests), else the git repo that contains the current directory.
+
+    run_command starts in the repository, so the current directory is enough there. The harness may
+    not have a real /workspace directory (it rewrites that path inside run_command strings only).
+    """
+    if os.environ.get("NAV_ROOT"):
+        return os.environ["NAV_ROOT"]
+    try:
+        res = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=20)
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
+    if os.path.isdir("/workspace/.git"):
+        return "/workspace"
+    return None
+
+
+ROOT = find_root() or "/workspace"
+ROOT_FOUND = os.path.exists(os.path.join(ROOT, ".git"))
 MAX_CHARS = 6000
 MAX_DIFF_CHARS = 2500
 NON_SOURCE_DIRS = ("docs/", "docs_src/", "examples/", "benchmarks/", "scripts/")
@@ -280,7 +307,7 @@ def render(path, src_lines, start, end, folds, max_lines, header):
             ln += 1
         shown += 1
         if shown >= max_lines and ln <= end:
-            lines.append("... stopped at line %d; run: show %s %d" % (ln - 1, path, ln))
+            lines.append("... stopped at line %d; run: %s show %s %d" % (ln - 1, NAV, path, ln))
             break
     return lines
 
@@ -288,11 +315,11 @@ def render(path, src_lines, start, end, folds, max_lines, header):
 def cmd_show(path, target, max_lines=160):
     rel = resolve(path)
     if rel is None:
-        out("Path %s is outside /workspace." % path)
+        out("Path %s is outside the repository." % path)
         return
     path = rel
     if not os.path.isfile(os.path.join(ROOT, path)):
-        out("No such file: %s (paths are relative to /workspace)" % path)
+        out("No such file: %s (paths are relative to the repository root)" % path)
         return
     src = read(path)
     src_lines = src.splitlines()
@@ -327,7 +354,7 @@ def cmd_show(path, target, max_lines=160):
             lines.append("%5d %s" % (ln, src_lines[ln - 1]))
         for m_name, m_start, m_end, m_kind in members:
             lines.append("      %s %s  L%d-%d" % (m_kind, m_name.split(".")[-1], m_start, m_end))
-        lines.append("Use: show %s %s.METHOD" % (path, name))
+        lines.append("Use: %s show %s %s.METHOD" % (NAV, path, name))
         out("\n".join(lines))
         return
     folder = _Folder()
@@ -392,7 +419,7 @@ def cmd_tests(names, per_test=12, max_tests=8):
             lines.append("%5d %s" % (ln, src_lines[ln - 1][:140]))
             prev = ln
         if end > show[-1]:
-            lines.append("      ... (show %s %d for the rest)" % (path, start))
+            lines.append("      ... (%s show %s %d for the rest)" % (NAV, path, start))
     if len(ranked) > max_tests:
         lines.append("... %d more test functions" % (len(ranked) - max_tests))
     out("\n".join(lines))
@@ -401,11 +428,11 @@ def cmd_tests(names, per_test=12, max_tests=8):
 def cmd_outline(path):
     rel = resolve(path)
     if rel is None:
-        out("Path %s is outside /workspace." % path)
+        out("Path %s is outside the repository." % path)
         return
     path = rel
     if not os.path.isfile(os.path.join(ROOT, path)):
-        out("No such file: %s (paths are relative to /workspace)" % path)
+        out("No such file: %s (paths are relative to the repository root)" % path)
         return
     syms = symbols(path)
     if not syms:
@@ -655,7 +682,7 @@ def cmd_check():
             continue
         missed.append("  %s: replaced on %d edited line(s); still used in %d untouched place(s):" % (tok, n, len(rest)))
         if len(rest) > 12:
-            missed.append("    (many uses; it may be a general name - check with refs %s if needed)" % tok)
+            missed.append("    (many uses; it may be a general name - check with %s refs %s if needed)" % (NAV, tok))
             continue
         for p, ln, t in rest[:6]:
             missed.append("    %s  %s  %d: %s" % (p, func_of(p, ln), ln, t.strip()[:90]))
@@ -769,16 +796,59 @@ def cmd_check():
 USAGE = __doc__
 
 
+def cmd_install():
+    """Copy this script to the sandbox /tmp so that run_command can run it as python3 /tmp/nav.py."""
+    with open(os.path.abspath(__file__)) as fh:
+        code = fh.read()
+    targets = []
+    for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep):
+        entry = os.path.normpath(entry) if entry else ""
+        if entry and os.path.basename(entry) == "workspace":  # swegemma sandbox: <root>/workspace and <root>/tmp
+            targets.append(os.path.join(os.path.dirname(entry), "tmp"))
+    targets.append(tempfile.gettempdir())
+    written = []
+    for folder in targets:
+        dest = os.path.join(folder, "nav.py")
+        if dest in written or not os.path.isdir(folder):
+            continue
+        try:
+            with open(dest, "w") as fh:
+                fh.write(code)
+            written.append(dest)
+        except Exception:
+            pass
+    if not written:
+        out("install failed: no writable temp directory. Do not use code-nav; use git grep and read_file.")
+        return
+    out("installed code-nav. From now on run it with run_command from the repository, for example:\n"
+        '  run_command(command="%s find exact_name other_name")\n'
+        "Commands: find TERM..., show FILE SYMBOL|LINE, refs NAME, tests NAME..., outline FILE, check" % NAV)
+
+
+def clean(arg):
+    """Drop quotes and backticks the model sometimes wraps around words."""
+    return arg.strip().strip("\"'`").strip()
+
+
 def main(argv):
     # Tolerate the whole command as one string ("show a.py Foo") and dict-style args (--show a.py --symbol Foo).
     if len(argv) == 1 and " " in argv[0].strip():
         argv = argv[0].split()
+    argv = [clean(a) for a in argv if clean(a)]
     if not argv:
         out(USAGE)
         return
     dict_style = argv[0].startswith("--")  # ADK turns args={"show": f, "symbol": s} into --show f --symbol s
     cmd = argv[0].lstrip("-").lower()
-    rest = [a for a in argv[1:] if a.strip() and not (dict_style and a.startswith("--"))]
+    rest = [a for a in argv[1:] if not (dict_style and a.startswith("--"))]
+    if cmd == "install":
+        cmd_install()
+        return
+    if not ROOT_FOUND:
+        out("code-nav is not running inside the repository. Run it with run_command, for example\n"
+            '  run_command(command="%s %s")\n'
+            "If /tmp/nav.py does not exist, call run_skill_script with args [\"install\"] once." % (NAV, " ".join(argv)))
+        return
     if cmd == "show" and len(rest) == 1 and re.match(r"^[^:]+\.py:\d+$", rest[0]):
         rest = rest[0].split(":")  # show FILE:LINE
     if cmd == "find" and rest:

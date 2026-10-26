@@ -17,15 +17,18 @@ These rules apply at every step. If they conflict with the general instructions 
 List for yourself: the exact file, function, class or CLI names; the exact error message and exception type; the expected output; the inputs that trigger the bug; every edge case mentioned (None, empty, negative, unicode, duplicates, defaults). The names, messages and outputs that the issue asks for must appear exactly in your code. Names and strings that only appear in tracebacks, the current wrong output or example variables are context, not requirements.
 
 ## 2. Locate
-Locate and read source code with the code-nav skill. Its usage is given here, so you do not need load_skill. Every call has this form, with plain words in `args`:
+Search and read source code with code-nav, a script that you install once and then run with run_command.
+- Your first tool call installs it. Use exactly this call:
 ```
-run_skill_script(skill_name="code-nav", file_path="scripts/nav.py", args=["find", "exact_name", "other_name"])
+run_skill_script(skill_name="code-nav", file_path="scripts/nav.py", args=["install"])
 ```
-- `["find", TERM, ...]`: 2-6 exact names or short strings from the issue. Returns the best library source files and the functions in them that contain the terms, and lists matching docs_src, examples or scripts files separately.
-- `["show", FILE, SYMBOL]` or `["show", FILE, LINE]`: prints a function or class (`Class.method`) with line numbers; a very long one comes in parts and the output says how to continue. Use it instead of grep plus read_file, and never page through a file.
-- `["refs", NAME]`: the uses of NAME outside tests, grouped by function. Use it to find every place a change must go.
-- `["tests", NAME]`: existing tests that use NAME, which show the expected behaviour.
-- `["outline", FILE]`: the classes and functions of a file with line ranges.
+  If the result does not say `installed code-nav`, repeat exactly this call once. If it fails again, do not use code-nav for the rest of the task: use `git grep -n -F` and read_file instead.
+- After that, run every code-nav command with run_command, for example `run_command(command="python3 /tmp/nav.py find exact_name other_name")`. Put a term that contains spaces in single quotes.
+  - `python3 /tmp/nav.py find TERM ...`: 2-6 exact names or short strings from the issue. Returns the best library source files and the functions in them that contain the terms, and lists matching docs_src, examples or scripts files separately.
+  - `python3 /tmp/nav.py show FILE SYMBOL` or `python3 /tmp/nav.py show FILE LINE`: prints a function or class (`Class.method`) with line numbers; a very long one comes in parts and the output says how to continue. Use it instead of grep plus read_file, and never page through a file.
+  - `python3 /tmp/nav.py refs NAME`: the uses of NAME outside tests, grouped by function. Use it to find every place a change must go.
+  - `python3 /tmp/nav.py tests NAME`: existing tests that use NAME, which show the expected behaviour.
+  - `python3 /tmp/nav.py outline FILE`: the classes and functions of a file with line ranges.
 Steps:
 - Use paths from the issue directly. Otherwise run one `find` with the issue's most specific terms, then `show` the best candidate.
 - Bug: find where the wrong behaviour is produced, not where it is observed. If the issue is vague (only a title), run `tests` on the feature it names to see the expected behaviour, then reproduce it once.
@@ -75,7 +78,7 @@ What to change:
 - If a test related to your change fails, read the traceback, fix the source once and rerun once. If no test can run, run `python -m py_compile` on every edited file.
 
 ## 5. Check and submit
-- Run check once: `run_skill_script(skill_name="code-nav", file_path="scripts/nav.py", args=["check"])`. If it cannot run, use `git status --short && git diff` instead.
+- Run check once: `run_command(command="python3 /tmp/nav.py check")`. If it cannot run, use `git status --short && git diff` instead.
 - Fix every compile error it reports. If it reports a new file named like a scratch script and you created that file only to reproduce or debug, delete it: `submit_patch` includes new files. If it reports a protected file, the grader drops that change, so make the fix in other files. For each possible missed place, edit it only if the issue needs the same change there; otherwise leave it.
 - From its diff, confirm that every name, message and type from step 1 appears exactly, nothing unrelated was touched, and there are no debug prints.
 - Call `submit_patch`. Confirm `patch_size > 0` and `files_changed > 0`. If either is 0, you have not edited anything: edit now and submit again.

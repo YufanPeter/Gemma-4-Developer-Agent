@@ -5,6 +5,8 @@ Each test builds a small git repo in a temp dir and runs nav.py on it with NAV_R
 """
 import importlib.util
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -51,9 +53,12 @@ class Repo:
     def git(self, *args):
         subprocess.run(["git"] + list(args), cwd=self.root, check=True, capture_output=True)
 
-    def nav(self, *args):
-        env = dict(os.environ, NAV_ROOT=self.root, PYTHONDONTWRITEBYTECODE="1")
-        res = subprocess.run([sys.executable, "-I", NAV] + list(args), cwd=tempfile.gettempdir(),
+    def nav(self, *args, cwd=None, use_env=True):
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+        env.pop("NAV_ROOT", None)
+        if use_env:
+            env["NAV_ROOT"] = self.root
+        res = subprocess.run([sys.executable, "-I", NAV] + list(args), cwd=cwd or tempfile.gettempdir(),
                              env=env, capture_output=True, text=True, timeout=60)
         if res.returncode != 0 or "Traceback" in res.stderr:
             raise AssertionError("nav.py %s failed:\n%s" % (" ".join(args), res.stderr))
@@ -171,8 +176,8 @@ class TestShow(unittest.TestCase):
         self.assertIn("not found", self.repo.nav("show", "pkg/core.py", "nosuch"))
 
     def test_paths_outside_workspace_refused(self):
-        self.assertIn("outside /workspace", self.repo.nav("outline", "/etc/passwd"))
-        self.assertIn("outside /workspace", self.repo.nav("show", "../" * 30 + "etc/hosts", "1"))
+        self.assertIn("outside the repository", self.repo.nav("outline", "/etc/passwd"))
+        self.assertIn("outside the repository", self.repo.nav("show", "../" * 30 + "etc/hosts", "1"))
         self.assertIn("check", self.repo.nav("show", "./pkg/core.py", "check"))
         self.assertIn("check", self.repo.nav("show", os.path.join(self.repo.root, "pkg/core.py"), "check"))
 
@@ -318,6 +323,104 @@ class TestCheck(unittest.TestCase):
         self.assertIn("more changed lines in this file", diff)
         self.assertIn("LAST = 1", diff)
         self.assertLess(len(out), 6100)
+
+
+class TestRunCommandUse(unittest.TestCase):
+    """How the agent runs it: run_command starts in the repository; no NAV_ROOT."""
+
+    def setUp(self):
+        self.repo = Repo({"pkg/__init__.py": "", "pkg/core.py": CORE})
+
+    def tearDown(self):
+        self.repo.close()
+
+    def test_repo_found_from_current_directory(self):
+        out = self.repo.nav("find", "build", "version", cwd=os.path.join(self.repo.root, "pkg"), use_env=False)
+        self.assertTrue(out.startswith("pkg/core.py"), out)
+
+    def test_outside_repo_prints_run_command_hint(self):
+        with tempfile.TemporaryDirectory() as elsewhere:
+            out = self.repo.nav("find", "build", cwd=elsewhere, use_env=False)
+        self.assertIn("Run it with run_command", out)
+        self.assertIn("python3 /tmp/nav.py find build", out)
+
+    def test_quotes_and_backticks_are_dropped(self):
+        out = self.repo.nav('"find"', "`build`", "'version'")
+        self.assertTrue(out.startswith("pkg/core.py"), out)
+
+
+def swegemma_rewrite(command, workspace, tmp):
+    """The /tmp and /workspace rewriting that swegemma's subprocess sandbox applies to run_command strings."""
+    command = re.sub(r"(?<![\w.-])/tmp(?![\w.-])", tmp, command)
+    return re.sub(r"(?<![\w.-])/workspace(?![\w.-])", workspace, command)
+
+
+class TestSubprocessSandboxEmulation(unittest.TestCase):
+    """Kaggle runs tasks in swegemma's subprocess sandbox: <root>/workspace holds the repo, <root>/tmp is
+    what /tmp means inside run_command, and there is no real /workspace directory."""
+
+    def setUp(self):
+        self.box = tempfile.TemporaryDirectory()
+        self.workspace = os.path.join(self.box.name, "workspace")
+        self.tmp = os.path.join(self.box.name, "tmp")
+        os.makedirs(self.tmp)
+        self.repo = Repo({"pkg/__init__.py": "", "pkg/core.py": CORE})
+        shutil.copytree(self.repo.root, self.workspace)
+
+    def tearDown(self):
+        self.repo.close()
+        self.box.cleanup()
+
+    def run_skill_install(self, tmpdir):
+        """Like ADK's run_skill_script: copy the script into a fresh temp dir and run it there."""
+        stage = tempfile.mkdtemp(dir=tmpdir)
+        os.makedirs(os.path.join(stage, "scripts"))
+        shutil.copy(NAV, os.path.join(stage, "scripts", "nav.py"))
+        code = ("import os, runpy, sys; os.chdir(%r); sys.argv = ['scripts/nav.py', 'install']; "
+                "runpy.run_path('scripts/nav.py', run_name='__main__')" % stage)
+        env = {k: v for k, v in os.environ.items() if k != "NAV_ROOT"}
+        env.update(PYTHONPATH=self.workspace, TMPDIR=tmpdir, PYTHONDONTWRITEBYTECODE="1")
+        res = subprocess.run([sys.executable, "-c", code], cwd=self.workspace, env=env,
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return res.stdout
+
+    def run_command(self, command):
+        env = {k: v for k, v in os.environ.items() if k != "NAV_ROOT"}
+        env.update(PYTHONPATH=self.workspace, PYTHONDONTWRITEBYTECODE="1", PATH=os.path.dirname(sys.executable) + os.pathsep + env.get("PATH", ""))
+        res = subprocess.run(["/bin/bash", "-c", swegemma_rewrite(command, self.workspace, self.tmp)],
+                             cwd=self.workspace, env=env, capture_output=True, text=True, timeout=60)
+        return res.stdout + res.stderr
+
+    def test_install_then_run_command(self):
+        out = self.run_skill_install(self.tmp)
+        self.assertIn("installed code-nav", out)
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, "nav.py")))
+        found = self.run_command("python3 /tmp/nav.py find build version")
+        self.assertTrue(found.startswith("pkg/core.py"), found)
+        self.assertIn("App.run", self.run_command("python3 /tmp/nav.py show pkg/core.py App.run"))
+
+    def test_install_reaches_sandbox_tmp_even_if_tmpdir_is_elsewhere(self):
+        with tempfile.TemporaryDirectory() as host_tmp:
+            self.run_skill_install(host_tmp)
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, "nav.py")))
+
+    def test_check_sees_edits_through_run_command(self):
+        self.run_skill_install(self.tmp)
+        with open(os.path.join(self.workspace, "pkg", "core.py"), "a") as fh:
+            fh.write("\nEXTRA = 1\n")
+        out = self.run_command("python3 /tmp/nav.py check")
+        self.assertNotIn("NO CHANGES", out)
+        self.assertIn("pkg/core.py", out)
+
+    def test_old_style_skill_call_explains_run_command(self):
+        stage = tempfile.mkdtemp(dir=self.tmp)
+        shutil.copy(NAV, os.path.join(stage, "nav.py"))
+        env = {k: v for k, v in os.environ.items() if k != "NAV_ROOT"}
+        env.update(PYTHONPATH=self.workspace, PYTHONDONTWRITEBYTECODE="1")
+        res = subprocess.run([sys.executable, os.path.join(stage, "nav.py"), "find", "build"], cwd=stage,
+                             env=env, capture_output=True, text=True, timeout=60)
+        self.assertIn("Run it with run_command", res.stdout)
 
 
 if __name__ == "__main__":
