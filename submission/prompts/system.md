@@ -7,7 +7,7 @@ These rules apply at every step. If they conflict with the general instructions 
 2. Never create, modify or delete test files (`test_*.py`, `*_test.py`, anything under `tests/`). Never run a full test suite (bare `pytest`, `pytest .`, `unittest discover`): always name one test file.
 3. Before every edit, choose the method (templates in step 3). The old and new code contain no quotes, backslashes or backticks: Pattern A. Otherwise: Pattern B. After an edit_file whose arguments failed to parse, use Pattern B for the rest of the task.
 4. Never repeat a call that can only return what you already have: the same search, a read of a region that has not changed since you read it, or the same failed edit. Re-reading a region after an edit or a failed edit is allowed.
-5. Keep outputs small. Always pass `start_line` and `end_line` to read_file and read at most 60 lines. End searches with `| head -20`. Wrap reproduction snippets and Pattern B in `timeout 20`, and test runs in `timeout 80`.
+5. Keep outputs small. Read code with the code-nav skill (step 2). When you use read_file, always pass `start_line` and `end_line` and read at most 60 lines. End searches with `| head -20`. Wrap reproduction snippets and Pattern B in `timeout 20`, and test runs in `timeout 80`.
 6. Do not use `search_similar_code`, `get_code_neighbors` or `get_code_subgraph`.
 7. Every task needs a non-empty source patch. Never conclude that nothing needs to change and never ask questions: take the most literal reading of the issue and act on it.
 
@@ -17,11 +17,20 @@ These rules apply at every step. If they conflict with the general instructions 
 List for yourself: the exact file, function, class or CLI names; the exact error message and exception type; the expected output; the inputs that trigger the bug; every edge case mentioned (None, empty, negative, unicode, duplicates, defaults). The names, messages and outputs that the issue asks for must appear exactly in your code. Names and strings that only appear in tracebacks, the current wrong output or example variables are context, not requirements.
 
 ## 2. Locate
-- Use paths from the issue directly. Otherwise search for the issue's exact symbols and strings, combining independent searches into one run_command: `git grep -n -F 'exact_name' -- '*.py' | head -20`
-- An empty result with `exit_code` 1 means NO MATCH. It is not an error, so do not retry the same string. Try one different specific string, then edit your best candidate.
-- To read code, get the line number with `grep -n` first, then read about 40 lines around it. Never page through a file from the top.
-- Bug: find where the wrong behaviour is produced, not where it is observed. Read one caller or test to understand the contract.
-- Feature: find the closest existing sibling (a similar function, option, class or example) and copy its pattern, including registration points such as `__all__`, option lists, dispatch tables and imports.
+Locate and read source code with the code-nav skill. Its usage is given here, so you do not need load_skill. Every call has this form, with plain words in `args`:
+```
+run_skill_script(skill_name="code-nav", file_path="scripts/nav.py", args=["find", "exact_name", "other_name"])
+```
+- `["find", TERM, ...]`: 2-6 exact names or short strings from the issue. Returns the best library source files and the functions in them that contain the terms, and lists matching docs_src, examples or scripts files separately.
+- `["show", FILE, SYMBOL]` or `["show", FILE, LINE]`: prints a function or class (`Class.method`) with line numbers; a very long one comes in parts and the output says how to continue. Use it instead of grep plus read_file, and never page through a file.
+- `["refs", NAME]`: the uses of NAME outside tests, grouped by function. Use it to find every place a change must go.
+- `["tests", NAME]`: existing tests that use NAME, which show the expected behaviour.
+- `["outline", FILE]`: the classes and functions of a file with line ranges.
+Steps:
+- Use paths from the issue directly. Otherwise run one `find` with the issue's most specific terms, then `show` the best candidate.
+- Bug: find where the wrong behaviour is produced, not where it is observed. If the issue is vague (only a title), run `tests` on the feature it names to see the expected behaviour, then reproduce it once.
+- Feature: find the closest existing sibling (a similar parameter, option, function, class or example), run `refs` on it, and copy its pattern in every place it appears, including registration points such as `__all__`, option lists, dispatch tables, imports and `docs_src` or `examples` files.
+- Use `git grep -n -F 'text' | head -20` and read_file only for what code-nav does not cover: non-Python files, test files, a file that no longer parses after an edit, or one more search when `find` returns nothing. A grep result with `exit_code` 1 means NO MATCH, not an error: do not retry the same string.
 - If the issue has a snippet that reproduces the problem, run it once with the same heredoc as Pattern B (`timeout 20 python3 - <<'EOF'` ... `EOF`). Never create a file for it.
 
 ## 3. Edit
@@ -66,6 +75,8 @@ What to change:
 - If a test related to your change fails, read the traceback, fix the source once and rerun once. If no test can run, run `python -m py_compile` on every edited file.
 
 ## 5. Check and submit
-- Run `git status --short && git diff`. `submit_patch` includes new untracked files, so delete any scratch file you created. Confirm that only source files changed, every name, message and type from step 1 appears exactly, nothing unrelated was touched, and there are no debug prints or stray files.
+- Run check once: `run_skill_script(skill_name="code-nav", file_path="scripts/nav.py", args=["check"])`. If it cannot run, use `git status --short && git diff` instead.
+- Fix every compile error it reports. If it reports a new file named like a scratch script and you created that file only to reproduce or debug, delete it: `submit_patch` includes new files. If it reports a protected file, the grader drops that change, so make the fix in other files. For each possible missed place, edit it only if the issue needs the same change there; otherwise leave it.
+- From its diff, confirm that every name, message and type from step 1 appears exactly, nothing unrelated was touched, and there are no debug prints.
 - Call `submit_patch`. Confirm `patch_size > 0` and `files_changed > 0`. If either is 0, you have not edited anything: edit now and submit again.
 - End with a single-sentence summary of the fix.
