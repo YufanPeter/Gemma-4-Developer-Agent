@@ -59,6 +59,15 @@ run. (`exp_res/results_baseline_1016/` used an older 30-task subset; 13 tasks ov
   reference files, and the target tests `test_patch` adds. Used by `triage.py --tasks`.
 - `trace_stats.py` — per-task budget usage from `traces/`: first source-edit call,
   read count, scratch-script writes, thinking-saturated steps, decode speed.
+- `../trace_platform/` — the trace platform: live view of a running Kaggle eval (through the notebook
+  log, `python -m trace_platform.kaggle_logs <owner>/<kernel>`), all past runs, waterfall / context-window /
+  GPU pages, one-file sharing (`cli export` / `cli import`) and text analysis (`cli summary|tasks|show|grep|compare`).
+  See `trace_platform/README.md`.
+- `trace_viewer.py` — `python eval/trace_viewer.py --results-dir exp_res/results_<RUN_NAME>` writes a
+  self-contained `trace_viewer.html` into the run folder and opens it: per task, prompt tokens of every
+  LLM call over time (by sub-agent, with the 14,336 compaction threshold, the 32,768 max_model_len and
+  detected compactions marked), step durations, and every step's thinking / tool args / output, plus
+  the patch and test log. Click a point on the chart to jump to that step; j/k move between tasks.
 
 ## What triage reads (`results/`)
 
