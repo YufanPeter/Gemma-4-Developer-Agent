@@ -15,7 +15,7 @@ Hard limits (see `docs/overview.md`, `docs/data_description.md`, `docs/HARNESS_R
 - `scripts/package_submission.py` — builds and validates `dist/submission.zip`, prints a fingerprint.
 - `notebooks/getting-started-gemma-4-developer-agent.ipynb` — Kaggle dev-eval runner (fixed 60-task `DEV_IDS`).
 - `eval/` — `triage.py`, `trace_stats.py`, `refdiff.py` (stdlib only); see `eval/README.md`.
-- `exp_res/results_<run>/` — one folder per dev run (patches, traces, logs, test_outputs, triage). `results_baseline_1016` is an older 30-task run.
+- `exp_res/results_<run>/` — one folder per dev run (patches, traces, logs, test_outputs, triage). Only full dev60 runs are kept; each folder has a short `README.md` saying what that version changed and how it scored.
 - `tasks.jsonl` at the root is the public set (git-ignored).
 
 ## How we work

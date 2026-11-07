@@ -1,0 +1,92 @@
+diff --git a/src/httpx/_network.py b/src/httpx/_network.py
+index 5ea9bb5..5a9cc97 100644
+--- a/src/httpx/_network.py
++++ b/src/httpx/_network.py
+@@ -160,7 +160,8 @@ class NetworkServer:
+         self._max_workers = 5
+         self._executor = None
+         self._thread = None
+-        self._streams = list[NetworkStream]
++        self._streams: list[NetworkStream] = []
++        self._lock = threading.Lock()
+ 
+     @property
+     def host(self):
+@@ -176,6 +177,9 @@ class NetworkServer:
+         return self
+ 
+     def __exit__(self, exc_type, exc_val, exc_tb):
++        with self._lock:
++            for stream in self._streams:
++                stream.close()
+         self.listener.close()
+         self._executor.shutdown(wait=True)
+ 
+@@ -184,9 +188,13 @@ class NetworkServer:
+             self._executor.submit(self._handler, stream)
+ 
+     def _handler(self, stream):
++        with self._lock:
++            self._streams.append(stream)
+         try:
+             self.handler(stream)
+         finally:
++            with self._lock:
++                self._streams.remove(stream)
+             stream.close()
+ 
+ 
+diff --git a/src/httpx/_parsers.py b/src/httpx/_parsers.py
+index 830fccd..86717bf 100644
+--- a/src/httpx/_parsers.py
++++ b/src/httpx/_parsers.py
+@@ -375,9 +375,13 @@ class HTTPParser:
+             self.recv_state = State.DONE
+         return body
+ 
+-    def complete(self):
++    @property
++    def keep_alive(self) -> bool:
++        return self.send_keep_alive and self.recv_keep_alive
++
++    def reset(self):
+         is_fully_complete = self.send_state == State.DONE and self.recv_state == State.DONE
+-        is_keepalive = self.send_keep_alive and self.recv_keep_alive
++        is_keepalive = self.keep_alive
+ 
+         if not (is_fully_complete and is_keepalive):
+             self.close()
+diff --git a/src/httpx/_server.py b/src/httpx/_server.py
+index 95226d9..a89746e 100644
+--- a/src/httpx/_server.py
++++ b/src/httpx/_server.py
+@@ -49,6 +49,9 @@ class HTTPConnection:
+                     else:
+                         self._send_head(response)
+                         self._send_body(response)
++                    finally:
++                        if self._parser.keep_alive:
++                            request.read()
+         except Exception:
+             logger.error("Internal Server Error", exc_info=True)
+ 
+@@ -89,7 +92,7 @@ class HTTPConnection:
+ 
+     # Start it all over again...
+     def _complete(self):
+-        self._parser.complete
++        self._parser.reset()
+         self._idle_expiry = time.monotonic() + self._keepalive_duration
+ 
+ 
+@@ -122,5 +125,8 @@ def serve_http(endpoint):
+ 
+ 
+ def run(app):
+-    with serve_http(app) as server:
+-        server.wait()
++    try:
++        with serve_http(app) as server:
++            server.wait()
++    except KeyboardInterrupt:
++        pass
