@@ -123,7 +123,7 @@
 ### Gate 3：12 小时全局预算校准（`eval_config.yaml`）
 官方隐藏测试集约 120 题，全局硬性限时 12 小时，**包含 vLLM 启动与每题 sandbox setup**；超时会导致整份提交报错。
 - [ ] 当前基线每题平均 5.42 分钟，120 题仅 agent 时间就约 10.8h，已接近上限；若每题上限设为 390s，最坏情况为 120 × 390s = 13h，超出预算。
-- [ ] 将 `max_time_minutes` 设为 **5–5.5**，`max_tool_calls` 保持 **28**。
+- [x] 将 `max_time_minutes` 设为 **5**，`max_tool_calls` 保持 **28**。已落地，`scripts/package_submission.py` 和训练 notebook 打包时都会检查（`docs/plan_rft.md`）。
 - [ ] 准入条件：**平均每题耗时（含 Gate 2c 实测的 LoRA 开销）× 120 + vLLM 启动 + setup ≤ 10.8h**（留 10% 余量）。
 
 ---

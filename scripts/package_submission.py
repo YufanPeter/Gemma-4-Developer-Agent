@@ -12,6 +12,8 @@ Checks (same as the notebook's packaging cell / docs/HARNESS_README.md §2):
   * no symlinks
   * only allowed extensions (.yaml .yml .md .txt .py .json .safetensors)
   * total unpacked size < 3 GiB
+  * time budget: max_time_minutes x 120 tasks <= 10.5 h, and the minutes stated in
+    prompts/*.md match it (12 h overruns error the whole submission)
 OS junk (.DS_Store, __pycache__, *.pyc, editor swap files) is skipped, not
 packaged -- .DS_Store alone would get the submission rejected.
 
@@ -26,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -37,6 +40,8 @@ MAX_TOTAL_BYTES = 3 * 1024**3
 SKIP_NAMES = {".DS_Store", "Thumbs.db"}
 SKIP_DIRS = {"__pycache__", ".ipynb_checkpoints", ".git"}
 DATASET = "tianyuxu2/gemma-4-agent-submission"
+N_HIDDEN_TASKS = 120
+MAX_WORST_CASE_HOURS = 10.5   # of the 12 h limit; the rest is vLLM startup, sandbox setup, overshoot
 
 
 def submission_fingerprint(root: Path, files: list[Path]) -> str:
@@ -74,6 +79,23 @@ def collect(src: Path) -> tuple[list[Path], list[str]]:
     return files, errors
 
 
+def check_time_budget(src: Path) -> list[str]:
+    """Worst case: every hidden task uses its whole budget. Must match the training notebook."""
+    cfg = next((c for n in ("eval_config.yaml", "eval_config.yml") if (c := src / n).is_file()), None)
+    m = re.search(r"^\s*max_time_minutes\s*:\s*([0-9.]+)", cfg.read_text(encoding="utf-8"), re.M) if cfg else None
+    if not m:
+        return ["eval_config.yaml has no max_time_minutes: the harness default is 60 min per task"]
+    minutes, problems = float(m.group(1)), []
+    hours = minutes * N_HIDDEN_TASKS / 60
+    if hours > MAX_WORST_CASE_HOURS:
+        problems.append(f"max_time_minutes {minutes:g} x {N_HIDDEN_TASKS} tasks = {hours:g} h, over the {MAX_WORST_CASE_HOURS} h limit")
+    for p in sorted((src / "prompts").glob("*.md")):
+        for said in re.findall(r"(\d+(?:\.\d+)?)\s+minutes", p.read_text(encoding="utf-8")):
+            if float(said) != minutes:
+                problems.append(f"{p.relative_to(src)} says {said} minutes, eval_config says {minutes:g}")
+    return problems
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Package and validate submission.zip")
     ap.add_argument("--src", default="submission", type=Path)
@@ -84,6 +106,7 @@ def main() -> None:
     args = ap.parse_args()
 
     files, errors = collect(args.src)
+    errors += check_time_budget(args.src)
     if errors:
         for e in errors:
             print("ERROR:", e, file=sys.stderr)
